@@ -14,7 +14,7 @@ load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 DB_PATH = os.path.join(os.path.dirname(__file__), "messages.db")
 
 USERS = {
@@ -34,8 +34,6 @@ app.add_middleware(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
-# ─── DB ───────────────────────────────────────────────────────────────────────
-
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -43,32 +41,52 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 sender TEXT NOT NULL,
                 content TEXT NOT NULL,
-                timestamp TEXT NOT NULL
+                timestamp TEXT NOT NULL,
+                delivered INTEGER DEFAULT 0,
+                read INTEGER DEFAULT 0
             )
         """)
+        # Add columns if upgrading from old schema
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN delivered INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN read INTEGER DEFAULT 0")
+        except Exception:
+            pass
         await db.commit()
 
 async def save_message(sender: str, content: str) -> dict:
     ts = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO messages (sender, content, timestamp) VALUES (?, ?, ?)",
+            "INSERT INTO messages (sender, content, timestamp, delivered, read) VALUES (?, ?, ?, 0, 0)",
             (sender, content, ts)
         )
         await db.commit()
-        return {"id": cur.lastrowid, "sender": sender, "content": content, "timestamp": ts}
+        return {"id": cur.lastrowid, "sender": sender, "content": content, "timestamp": ts, "delivered": False, "read": False}
+
+async def mark_delivered(msg_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE messages SET delivered=1 WHERE id=?", (msg_id,))
+        await db.commit()
+
+async def mark_read_by(reader: str):
+    """Mark all messages NOT from reader as read"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE messages SET read=1 WHERE sender != ? AND read=0", (reader,))
+        await db.commit()
 
 async def get_messages(limit: int = 100) -> list:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, sender, content, timestamp FROM messages ORDER BY id DESC LIMIT ?",
+            "SELECT id, sender, content, timestamp, delivered, read FROM messages ORDER BY id DESC LIMIT ?",
             (limit,)
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in reversed(rows)]
-
-# ─── Auth ─────────────────────────────────────────────────────────────────────
 
 def create_token(username: str) -> str:
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -86,8 +104,6 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
     if not username:
         raise HTTPException(status_code=401, detail="Invalid token")
     return username
-
-# ─── WebSocket Manager ────────────────────────────────────────────────────────
 
 class ConnectionManager:
     def __init__(self):
@@ -119,20 +135,24 @@ class ConnectionManager:
     def is_online(self, username: str) -> bool:
         return username in self.connections and len(self.connections[username]) > 0
 
+    async def send_to(self, username: str, message: dict):
+        """Send to a specific user's all connected sockets"""
+        if username not in self.connections:
+            return
+        dead = []
+        for ws in self.connections[username]:
+            try:
+                await ws.send_text(json.dumps(message))
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(username, ws)
+
     async def broadcast(self, message: dict):
-        for uname, ws_list in list(self.connections.items()):
-            dead_ws = []
-            for ws in ws_list:
-                try:
-                    await ws.send_text(json.dumps(message))
-                except Exception:
-                    dead_ws.append(ws)
-            for ws in dead_ws:
-                self.disconnect(uname, ws)
+        for uname in list(self.connections.keys()):
+            await self.send_to(uname, message)
 
 manager = ConnectionManager()
-
-# ─── Routes ───────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup():
@@ -164,19 +184,66 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
     if not username:
         await websocket.close(code=4001)
         return
-    
+
     await manager.connect(username, websocket)
     manager.update_status(username, True)
     await manager.broadcast({"type": "status", "data": manager.user_statuses})
-    
+
+    # When user connects, mark all incoming messages as delivered
+    # Find other users
+    other_users = [u for u in USERS.keys() if u != username]
+    for other in other_users:
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Get undelivered message IDs from other users
+            async with db.execute(
+                "SELECT id FROM messages WHERE sender=? AND delivered=0", (other,)
+            ) as cur:
+                undelivered = [row[0] for row in await cur.fetchall()]
+            if undelivered:
+                await db.execute(
+                    f"UPDATE messages SET delivered=1 WHERE sender=? AND delivered=0",
+                    (other,)
+                )
+                await db.commit()
+                # Notify sender of delivery
+                for msg_id in undelivered:
+                    await manager.send_to(other, {"type": "delivered", "id": msg_id})
+
     try:
         while True:
-            data = await websocket.receive_text()
-            payload = json.loads(data)
+            raw = await websocket.receive_text()
+
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = payload.get("type", "message")
+
+            if msg_type == "ping":
+                continue
+
+            # Client sends read receipt when it views messages
+            if msg_type == "read":
+                await mark_read_by(username)
+                other_users = [u for u in USERS.keys() if u != username]
+                for other in other_users:
+                    await manager.send_to(other, {"type": "read", "reader": username})
+                continue
+
             content = payload.get("content", "").strip()
             if content:
                 msg = await save_message(username, content)
+
+                # Broadcast new message
                 await manager.broadcast({"type": "message", "data": msg})
+
+                # If other user is online, immediately mark as delivered
+                for other in other_users:
+                    if manager.is_online(other):
+                        await mark_delivered(msg["id"])
+                        await manager.send_to(username, {"type": "delivered", "id": msg["id"]})
+
     except WebSocketDisconnect:
         manager.disconnect(username, websocket)
         if not manager.is_online(username):
