@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useRef, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { getMessages, getWsUrl } from '@/lib/api'
+import { getMessages, getStatus, getWsUrl } from '@/lib/api'
 
 interface Message {
   id: number
@@ -10,9 +10,15 @@ interface Message {
   timestamp: string
 }
 
+interface UserStatus {
+  online: boolean
+  last_seen: string | null
+}
+
 export default function ChatPage() {
   const router = useRouter()
   const [messages, setMessages] = useState<Message[]>([])
+  const [statuses, setStatuses] = useState<Record<string, UserStatus>>({})
   const [input, setInput] = useState('')
   const [username, setUsername] = useState('')
   const [connected, setConnected] = useState(false)
@@ -31,6 +37,9 @@ export default function ChatPage() {
       router.replace('/login')
     })
 
+    // Load initial status
+    getStatus(token).then(setStatuses).catch(console.error)
+
     // Connect WebSocket
     const ws = new WebSocket(getWsUrl(token))
     wsRef.current = ws
@@ -38,8 +47,19 @@ export default function ChatPage() {
     ws.onopen = () => setConnected(true)
     ws.onclose = () => setConnected(false)
     ws.onmessage = (e) => {
-      const msg: Message = JSON.parse(e.data)
-      setMessages(prev => [...prev, msg])
+      try {
+        const payload = JSON.parse(e.data)
+        if (payload.type === 'message') {
+          setMessages(prev => [...prev, payload.data])
+        } else if (payload.type === 'status') {
+          setStatuses(payload.data)
+        } else {
+          // Fallback for old format if any
+          if (payload.id && payload.content) {
+            setMessages(prev => [...prev, payload])
+          }
+        }
+      } catch (err) {}
     }
 
     return () => { ws.close() }
@@ -68,6 +88,10 @@ export default function ChatPage() {
     return new Date(ts + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   }
 
+  // Find the other user's status
+  const otherUser = Object.keys(statuses).find(u => u !== username) || 'Partner'
+  const otherStatus = statuses[otherUser]
+
   return (
     <div className="flex flex-col h-screen max-w-2xl mx-auto">
       {/* Header */}
@@ -82,6 +106,23 @@ export default function ChatPage() {
             </p>
           </div>
         </div>
+        
+        {/* Partner Status */}
+        {otherStatus && (
+          <div className="flex flex-col items-center justify-center text-center mx-auto">
+            <span className="text-sm font-semibold text-gray-300">{otherUser}</span>
+            <span className="text-xs">
+              {otherStatus.online ? (
+                <span className="text-green-400 font-medium">Online</span>
+              ) : (
+                <span className="text-gray-500">
+                  Last seen: {otherStatus.last_seen ? formatTime(otherStatus.last_seen) : 'Never'}
+                </span>
+              )}
+            </span>
+          </div>
+        )}
+
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-400">👤 {username}</span>
           <button onClick={logout} className="text-xs text-gray-500 hover:text-red-400 transition-colors">

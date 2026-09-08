@@ -91,24 +91,44 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
 
 class ConnectionManager:
     def __init__(self):
-        self.connections: dict[str, WebSocket] = {}
+        self.connections: dict[str, list[WebSocket]] = {}
+        self.user_statuses = {
+            os.getenv("USER1_NAME", "user1"): {"online": False, "last_seen": None},
+            os.getenv("USER2_NAME", "user2"): {"online": False, "last_seen": None},
+        }
 
     async def connect(self, username: str, ws: WebSocket):
         await ws.accept()
-        self.connections[username] = ws
+        if username not in self.connections:
+            self.connections[username] = []
+        self.connections[username].append(ws)
 
-    def disconnect(self, username: str):
-        self.connections.pop(username, None)
+    def disconnect(self, username: str, ws: WebSocket):
+        if username in self.connections:
+            if ws in self.connections[username]:
+                self.connections[username].remove(ws)
+            if not self.connections[username]:
+                self.connections.pop(username, None)
+
+    def update_status(self, username: str, online: bool):
+        if username in self.user_statuses:
+            self.user_statuses[username]["online"] = online
+            if not online:
+                self.user_statuses[username]["last_seen"] = datetime.utcnow().isoformat()
+
+    def is_online(self, username: str) -> bool:
+        return username in self.connections and len(self.connections[username]) > 0
 
     async def broadcast(self, message: dict):
-        dead = []
-        for uname, ws in self.connections.items():
-            try:
-                await ws.send_text(json.dumps(message))
-            except Exception:
-                dead.append(uname)
-        for uname in dead:
-            self.disconnect(uname)
+        for uname, ws_list in list(self.connections.items()):
+            dead_ws = []
+            for ws in ws_list:
+                try:
+                    await ws.send_text(json.dumps(message))
+                except Exception:
+                    dead_ws.append(ws)
+            for ws in dead_ws:
+                self.disconnect(uname, ws)
 
 manager = ConnectionManager()
 
@@ -134,13 +154,21 @@ async def login(form: OAuth2PasswordRequestForm = Depends()):
 async def messages(username: str = Depends(get_current_user)):
     return await get_messages()
 
+@app.get("/status")
+async def get_status(username: str = Depends(get_current_user)):
+    return manager.user_statuses
+
 @app.websocket("/ws/{token}")
 async def websocket_endpoint(websocket: WebSocket, token: str):
     username = verify_token(token)
     if not username:
         await websocket.close(code=4001)
         return
+    
     await manager.connect(username, websocket)
+    manager.update_status(username, True)
+    await manager.broadcast({"type": "status", "data": manager.user_statuses})
+    
     try:
         while True:
             data = await websocket.receive_text()
@@ -148,6 +176,9 @@ async def websocket_endpoint(websocket: WebSocket, token: str):
             content = payload.get("content", "").strip()
             if content:
                 msg = await save_message(username, content)
-                await manager.broadcast(msg)
+                await manager.broadcast({"type": "message", "data": msg})
     except WebSocketDisconnect:
-        manager.disconnect(username)
+        manager.disconnect(username, websocket)
+        if not manager.is_online(username):
+            manager.update_status(username, False)
+            await manager.broadcast({"type": "status", "data": manager.user_statuses})
