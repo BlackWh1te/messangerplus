@@ -225,30 +225,38 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  async function sendMessage(e: FormEvent) {
-    e.preventDefault()
-    const text = input.trim()
+  async function sendMessage(e?: FormEvent, retryText?: string, retryId?: string) {
+    if (e) e.preventDefault()
+    const text = (retryText || input).trim()
     if (!text) return
 
-    const optimisticId = `pending-${Date.now()}`
-    const optimistic: Message = {
-      id: optimisticId,
-      sender: usernameRef.current,
-      content: text,
-      timestamp: new Date().toISOString(),
-      pending: true,
-    }
-    setMessages(prev => [...prev, optimistic])
-    setInput('')
-
+    const optimisticId = retryId || `pending-${Date.now()}`
     const token = tokenRef.current!
+
+    if (!retryId) {
+      const optimistic: Message = {
+        id: optimisticId,
+        sender: usernameRef.current,
+        content: text,
+        timestamp: new Date().toISOString(),
+        pending: true,
+      }
+      setMessages(prev => [...prev, optimistic])
+      setInput('')
+    } else {
+      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: false, pending: true } : m))
+    }
 
     // Try WebSocket first (instant), always back up with HTTP POST
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ content: text }))
       // HTTP POST confirms delivery even if WS echo is lost
-      try { await sendMessageHttp(token, text) } catch { /* WS already sent it */ }
+      try { 
+        const msg = await sendMessageHttp(token, text) 
+        seenIdsRef.current.add(msg.id as number)
+        setMessages(prev => prev.map(m => m.id === optimisticId ? msg : m))
+      } catch { /* WS might have sent it, but if both fail, it's stuck pending, we'll let polling fix it or mark failed later */ }
     } else {
       // WS unavailable — use HTTP POST as primary
       try {
@@ -258,10 +266,24 @@ export default function ChatPage() {
         setMessages(prev => prev.map(m => m.id === optimisticId ? msg : m))
       } catch {
         // Mark as failed
-        setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: true } : m))
+        setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: true, pending: false } : m))
       }
     }
   }
+
+  // Auto-retry failed messages every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (connected) {
+        messages.forEach(m => {
+          if (m.failed && typeof m.id === 'string') {
+            sendMessage(undefined, m.content, m.id)
+          }
+        })
+      }
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [messages, connected])
 
   function logout() {
     destroyedRef.current = true
@@ -324,16 +346,26 @@ export default function ChatPage() {
                 </div>
               )}
               <div className={`max-w-[72%] flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                <div className={`px-3 py-2 text-sm leading-relaxed break-words ${
-                  isMe
-                    ? `bg-indigo-600 text-white rounded-2xl rounded-br-md ${msg.pending ? 'opacity-60' : ''}`
-                    : 'bg-gray-800 text-gray-100 rounded-2xl rounded-bl-md'
-                }`}>
-                  <span>{msg.content}</span>
-                  <span className={`text-[10px] ml-2 whitespace-nowrap inline-flex items-center ${isMe ? 'text-indigo-300' : 'text-gray-500'}`}>
-                    {formatTime(msg.timestamp)}
-                    {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
-                  </span>
+                <div className={`flex items-center gap-2`}>
+                  {isMe && msg.failed && (
+                    <button 
+                      onClick={() => sendMessage(undefined, msg.content, msg.id as string)}
+                      className="text-red-400 text-xs hover:underline bg-red-900/30 px-2 py-1 rounded-full whitespace-nowrap shrink-0"
+                    >
+                      ↻ Retry
+                    </button>
+                  )}
+                  <div className={`px-3 py-2 text-sm leading-relaxed break-words ${
+                    isMe
+                      ? `bg-indigo-600 text-white rounded-2xl rounded-br-md ${msg.pending ? 'opacity-60' : ''} ${msg.failed ? 'bg-red-900/80 border border-red-500/50' : ''}`
+                      : 'bg-gray-800 text-gray-100 rounded-2xl rounded-bl-md'
+                  }`}>
+                    <span>{msg.content}</span>
+                    <span className={`text-[10px] ml-2 whitespace-nowrap inline-flex items-center ${isMe ? 'text-indigo-300' : 'text-gray-500'}`}>
+                      {formatTime(msg.timestamp)}
+                      {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
