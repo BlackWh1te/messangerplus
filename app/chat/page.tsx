@@ -40,29 +40,63 @@ export default function ChatPage() {
     // Load initial status
     getStatus(token).then(setStatuses).catch(console.error)
 
-    // Connect WebSocket
-    const ws = new WebSocket(getWsUrl(token))
-    wsRef.current = ws
+    let ws: WebSocket | null = null;
+    let reconnectTimer: NodeJS.Timeout;
+    let pingTimer: NodeJS.Timeout;
 
-    ws.onopen = () => setConnected(true)
-    ws.onclose = () => setConnected(false)
-    ws.onmessage = (e) => {
-      try {
-        const payload = JSON.parse(e.data)
-        if (payload.type === 'message') {
-          setMessages(prev => [...prev, payload.data])
-        } else if (payload.type === 'status') {
-          setStatuses(payload.data)
-        } else {
-          // Fallback for old format if any
-          if (payload.id && payload.content) {
-            setMessages(prev => [...prev, payload])
+    function connect() {
+      if (!token) return;
+      ws = new WebSocket(getWsUrl(token))
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setConnected(true)
+        // Keep connection alive through proxies (like ngrok) and mobile networks
+        pingTimer = setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }))
           }
-        }
-      } catch (err) {}
+        }, 20000)
+      }
+
+      ws.onclose = () => {
+        setConnected(false)
+        clearInterval(pingTimer)
+        // Auto-reconnect every 3 seconds if connection drops
+        reconnectTimer = setTimeout(connect, 3000)
+      }
+
+      ws.onerror = () => {
+        ws?.close()
+      }
+
+      ws.onmessage = (e) => {
+        try {
+          const payload = JSON.parse(e.data)
+          if (payload.type === 'message') {
+            setMessages(prev => [...prev, payload.data])
+          } else if (payload.type === 'status') {
+            setStatuses(payload.data)
+          } else {
+            // Fallback for old format if any
+            if (payload.id && payload.content) {
+              setMessages(prev => [...prev, payload])
+            }
+          }
+        } catch (err) {}
+      }
     }
 
-    return () => { ws.close() }
+    connect()
+
+    return () => {
+      clearTimeout(reconnectTimer)
+      clearInterval(pingTimer)
+      if (ws) {
+        ws.onclose = null // prevent reconnect loop on unmount
+        ws.close()
+      }
+    }
   }, [router])
 
   // Auto-scroll to bottom
