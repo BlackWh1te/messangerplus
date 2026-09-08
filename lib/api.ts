@@ -1,15 +1,15 @@
-const API = 'https://iodine-napkin-handcraft.ngrok-free.dev'
+const NGROK_API = 'https://iodine-napkin-handcraft.ngrok-free.dev'
 
 export async function login(username: string, password: string) {
   const form = new URLSearchParams()
   form.append('username', username)
   form.append('password', password)
 
-  const res = await fetch(`${API}/login`, {
+  // Call Next.js proxy to bypass CORS
+  const res = await fetch(`/api/proxy/login`, {
     method: 'POST',
     headers: { 
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'ngrok-skip-browser-warning': '1'
+      'Content-Type': 'application/x-www-form-urlencoded'
     },
     body: form.toString(),
   })
@@ -22,10 +22,10 @@ export async function login(username: string, password: string) {
 }
 
 export async function getMessages(token: string) {
-  const res = await fetch(`${API}/messages`, {
+  // Call Next.js proxy to bypass CORS
+  const res = await fetch(`/api/proxy/messages`, {
     headers: { 
-      Authorization: `Bearer ${token}`,
-      'ngrok-skip-browser-warning': '1'
+      Authorization: `Bearer ${token}`
     },
   })
   if (!res.ok) throw new Error('Failed to load messages')
@@ -33,6 +33,7 @@ export async function getMessages(token: string) {
 }
 
 export function getWsUrl(token: string) {
-  const wsBase = API.replace(/^http/, 'ws')
+  // WebSockets bypass CORS naturally, so we connect directly to ngrok
+  const wsBase = NGROK_API.replace(/^http/, 'ws')
   return `${wsBase}/ws/${token}`
 }
