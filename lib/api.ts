@@ -1,4 +1,4 @@
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const API = 'https://iodine-napkin-handcraft.ngrok-free.dev'
 
 export async function login(username: string, password: string) {
   const form = new URLSearchParams()
