@@ -7,7 +7,10 @@ export async function login(username: string, password: string) {
 
   const res = await fetch(`${API}/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { 
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'ngrok-skip-browser-warning': '1'
+    },
     body: form.toString(),
   })
 
@@ -20,7 +23,10 @@ export async function login(username: string, password: string) {
 
 export async function getMessages(token: string) {
   const res = await fetch(`${API}/messages`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { 
+      Authorization: `Bearer ${token}`,
+      'ngrok-skip-browser-warning': '1'
+    },
   })
   if (!res.ok) throw new Error('Failed to load messages')
   return res.json()
