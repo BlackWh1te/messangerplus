@@ -6,17 +6,24 @@ export async function POST(req: NextRequest, { params }: { params: { path: strin
   try {
     const targetUrl = `${API}/${params.path.join('/')}`
     const body = await req.text()
+    const auth = req.headers.get('Authorization') || ''
     
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         'Content-Type': req.headers.get('Content-Type') || 'application/json',
+        'Authorization': auth,
         'ngrok-skip-browser-warning': '1'
       },
       body
     })
 
-    const data = await response.json()
+    let data;
+    try {
+      data = await response.json()
+    } catch {
+      return new NextResponse(null, { status: response.status })
+    }
     return NextResponse.json(data, { status: response.status })
   } catch (err: any) {
     return NextResponse.json({ detail: err.message }, { status: 500 })
