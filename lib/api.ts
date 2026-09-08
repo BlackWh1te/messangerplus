@@ -42,6 +42,19 @@ export async function getStatus(token: string) {
   return res.json()
 }
 
+export async function sendMessageHttp(token: string, content: string) {
+  const res = await fetch(`/api/proxy/send`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ content }),
+  })
+  if (!res.ok) throw new Error('Failed to send message')
+  return res.json()
+}
+
 export function getWsUrl(token: string) {
   // WebSockets bypass CORS naturally, so we connect directly to ngrok
   const wsBase = NGROK_API.replace(/^http/, 'ws')

@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { getMessages, getStatus, getWsUrl } from '@/lib/api'
+import { getMessages, getStatus, getWsUrl, sendMessageHttp } from '@/lib/api'
 
 const POLL_MS = 5000   // HTTP fallback poll every 5s
 const PING_MS = 15000  // WS keepalive ping every 15s (tighter for Android)
@@ -225,13 +225,14 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  function sendMessage(e: FormEvent) {
+  async function sendMessage(e: FormEvent) {
     e.preventDefault()
     const text = input.trim()
     if (!text) return
 
+    const optimisticId = `pending-${Date.now()}`
     const optimistic: Message = {
-      id: `pending-${Date.now()}`,
+      id: optimisticId,
       sender: usernameRef.current,
       content: text,
       timestamp: new Date().toISOString(),
@@ -240,11 +241,25 @@ export default function ChatPage() {
     setMessages(prev => [...prev, optimistic])
     setInput('')
 
+    const token = tokenRef.current!
+
+    // Try WebSocket first (instant), always back up with HTTP POST
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ content: text }))
+      // HTTP POST confirms delivery even if WS echo is lost
+      try { await sendMessageHttp(token, text) } catch { /* WS already sent it */ }
     } else {
-      queueRef.current.push(text)
+      // WS unavailable — use HTTP POST as primary
+      try {
+        const msg = await sendMessageHttp(token, text)
+        // Replace optimistic with real message
+        seenIdsRef.current.add(msg.id as number)
+        setMessages(prev => prev.map(m => m.id === optimisticId ? msg : m))
+      } catch {
+        // Mark as failed
+        setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: true } : m))
+      }
     }
   }
 
