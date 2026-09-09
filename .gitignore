@@ -2,6 +2,11 @@
 .env*.local
 node_modules/
 .next/
+.venv/
+__pycache__/
+*.pyc
+backend/messages.db
+backend/uploads/
 out/
 *.log
 

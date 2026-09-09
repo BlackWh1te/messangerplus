@@ -1,11 +1,12 @@
 """
-MessengerPlus Backend — Production-hardened FastAPI server
+MessengerPlus Backend - Production-hardened FastAPI server
 - HTTP POST /send as primary message delivery (always works, even on Android)
 - WebSocket /ws/{token} for real-time push (best-effort)
 - Delivery + read receipts
-- Full error handling — server never crashes
+- Full error handling - server never crashes
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -15,34 +16,57 @@ from typing import Optional
 
 import aiosqlite
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+import uuid
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 
-# ─── Config ──────────────────────────────────────────────────────────────────
+# Config
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+BASE_DIR = os.path.dirname(__file__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(os.path.join(BASE_DIR, "messages.log")),
+        logging.StreamHandler(),
+    ],
+)
 log = logging.getLogger("messenger")
 
 SECRET_KEY: str = os.getenv("SECRET_KEY", "fallback-secret-change-me")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "messages.db")
+DB_PATH = os.getenv("MESSENGER_DB_PATH", os.path.join(BASE_DIR, "messages.db"))
+UPLOAD_DIR = os.getenv("MESSENGER_UPLOAD_DIR", os.path.join(BASE_DIR, "uploads"))
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+ALLOWED_UPLOAD_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+CALL_SIGNAL_TYPES = {
+    "call:offer",
+    "call:answer",
+    "call:ice",
+    "call:end",
+    "call:busy",
+}
 
 USERS: dict[str, str] = {
     os.getenv("USER1_NAME", "user1"): os.getenv("USER1_PASS", "pass1"),
     os.getenv("USER2_NAME", "user2"): os.getenv("USER2_PASS", "pass2"),
 }
 
-# ─── Database ─────────────────────────────────────────────────────────────────
+# Database
 
 async def init_db() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10.0) as db:
+        await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,8 +77,8 @@ async def init_db() -> None:
                 read      INTEGER NOT NULL DEFAULT 0
             )
         """)
-        # Safe migrations — ignore if column already exists
-        for col_def in ["delivered INTEGER NOT NULL DEFAULT 0", "read INTEGER NOT NULL DEFAULT 0"]:
+        # Safe migrations: ignore if column already exists.
+        for col_def in ["delivered INTEGER NOT NULL DEFAULT 0", "read INTEGER NOT NULL DEFAULT 0", "nonce TEXT"]:
             col = col_def.split()[0]
             try:
                 await db.execute(f"ALTER TABLE messages ADD COLUMN {col_def}")
@@ -64,12 +88,27 @@ async def init_db() -> None:
     log.info("Database ready: %s", DB_PATH)
 
 
-async def db_save_message(sender: str, content: str) -> dict:
+async def db_save_message(sender: str, content: str, nonce: Optional[str] = None) -> dict:
     ts = datetime.utcnow().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10.0) as db:
+        if nonce:
+            async with db.execute(
+                "SELECT id,sender,content,timestamp,delivered,read FROM messages WHERE nonce=?",
+                (nonce,),
+            ) as cur:
+                row = await cur.fetchone()
+                if row:
+                    return {
+                        "id": row[0],
+                        "sender": row[1],
+                        "content": row[2],
+                        "timestamp": row[3],
+                        "delivered": bool(row[4]),
+                        "read": bool(row[5]),
+                    }
         cur = await db.execute(
-            "INSERT INTO messages (sender, content, timestamp, delivered, read) VALUES (?,?,?,0,0)",
-            (sender, content, ts),
+            "INSERT INTO messages (sender, content, timestamp, delivered, read, nonce) VALUES (?,?,?,0,0,?)",
+            (sender, content, ts, nonce),
         )
         await db.commit()
     return {"id": cur.lastrowid, "sender": sender, "content": content,
@@ -77,10 +116,10 @@ async def db_save_message(sender: str, content: str) -> dict:
 
 
 async def db_get_messages(limit: int = 100) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10.0) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id,sender,content,timestamp,delivered,read FROM messages ORDER BY id DESC LIMIT ?",
+            "SELECT id,sender,content,timestamp,delivered,read,nonce FROM messages ORDER BY id DESC LIMIT ?",
             (limit,),
         ) as cur:
             rows = await cur.fetchall()
@@ -89,7 +128,7 @@ async def db_get_messages(limit: int = 100) -> list[dict]:
 
 async def db_mark_delivered(sender: str) -> list[int]:
     """Mark all undelivered messages from sender as delivered. Returns their IDs."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10.0) as db:
         async with db.execute(
             "SELECT id FROM messages WHERE sender=? AND delivered=0", (sender,)
         ) as cur:
@@ -103,20 +142,20 @@ async def db_mark_delivered(sender: str) -> list[int]:
 
 
 async def db_mark_message_delivered(msg_id: int) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10.0) as db:
         await db.execute("UPDATE messages SET delivered=1 WHERE id=?", (msg_id,))
         await db.commit()
 
 
 async def db_mark_read_by(reader: str) -> None:
     """Mark all messages NOT from reader as read."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10.0) as db:
         await db.execute(
             "UPDATE messages SET read=1 WHERE sender != ? AND read=0", (reader,)
         )
         await db.commit()
 
-# ─── Auth ─────────────────────────────────────────────────────────────────────
+# Auth
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
@@ -140,19 +179,19 @@ async def require_user(token: str = Depends(oauth2_scheme)) -> str:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return username
 
-# ─── WebSocket Connection Manager ────────────────────────────────────────────
+# WebSocket Connection Manager
 
 class ConnectionManager:
     """Thread-safe (asyncio) manager for active WebSocket connections."""
 
     def __init__(self) -> None:
-        # username → list of open WebSocket connections (multiple tabs/devices)
+        # username -> list of open WebSocket connections (multiple tabs/devices)
         self._conns: dict[str, list[WebSocket]] = {}
         self._statuses: dict[str, dict] = {
             u: {"online": False, "last_seen": None} for u in USERS
         }
 
-    # ── Connection lifecycle ──────────────────────────────────────────────
+    # Connection lifecycle
 
     async def accept(self, username: str, ws: WebSocket) -> None:
         await ws.accept()
@@ -179,7 +218,7 @@ class ConnectionManager:
     def statuses(self) -> dict:
         return dict(self._statuses)
 
-    # ── Sending ───────────────────────────────────────────────────────────
+    # Sending
 
     async def _send_to_sockets(self, username: str, payload: dict) -> None:
         """Send to all sockets for a user, pruning dead ones silently."""
@@ -205,10 +244,16 @@ class ConnectionManager:
         for username in list(self._conns):
             await self.send_to(username, payload)
 
+    async def send_to_others(self, sender: str, payload: dict) -> int:
+        recipients = [username for username in USERS if username != sender and self._conns.get(username)]
+        for username in recipients:
+            await self.send_to(username, payload)
+        return len(recipients)
+
 
 manager = ConnectionManager()
 
-# ─── App & Middleware ─────────────────────────────────────────────────────────
+# App & Middleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -216,6 +261,8 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(title="MessengerPlus", lifespan=lifespan)
+
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
@@ -225,16 +272,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Schemas ──────────────────────────────────────────────────────────────────
+
+@app.middleware("http")
+async def log_unhandled_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        error_code = uuid.uuid4().hex[:10]
+        log.exception("Unhandled API error %s on %s %s", error_code, request.method, request.url.path)
+        return JSONResponse(
+            {"detail": "Server error", "error_code": error_code},
+            status_code=500,
+        )
+
+# Schemas
 
 class SendBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=4000)
+    nonce: Optional[str] = None
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+# Routes
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "users_online": [u for u, s in manager.statuses.items() if s["online"]]}
+    online = [u for u, s in manager.statuses.items() if s["online"]]
+    return {"status": "ok", "online": online, "users_online": online}
 
 
 @app.post("/login")
@@ -265,11 +327,11 @@ async def get_status(username: str = Depends(require_user)) -> dict:
 @app.post("/send")
 async def send_http(body: SendBody, username: str = Depends(require_user)) -> dict:
     """
-    Primary message delivery endpoint — always works even when WebSocket is unavailable.
+    Primary message delivery endpoint - always works even when WebSocket is unavailable.
     Used by Android and as fallback for all clients.
     """
     try:
-        msg = await db_save_message(username, body.content)
+        msg = await db_save_message(username, body.content, body.nonce)
     except Exception as exc:
         log.error("db_save_message error: %s", exc)
         raise HTTPException(status_code=500, detail="Could not save message")
@@ -291,11 +353,11 @@ async def send_http(body: SendBody, username: str = Depends(require_user)) -> di
             except Exception as exc:
                 log.error("mark_delivered error: %s", exc)
 
-    log.info("HTTP send: %s → %d chars", username, len(body.content))
+    log.info("HTTP send: %s -> %d chars", username, len(body.content))
     return msg
 
 
-# ─── WebSocket ────────────────────────────────────────────────────────────────
+# WebSocket
 
 @app.websocket("/ws/{token}")
 async def websocket_endpoint(ws: WebSocket, token: str) -> None:
@@ -326,7 +388,10 @@ async def websocket_endpoint(ws: WebSocket, token: str) -> None:
     try:
         while True:
             try:
-                raw = await ws.receive_text()
+                raw = await asyncio.wait_for(ws.receive_text(), timeout=60.0)
+            except asyncio.TimeoutError:
+                log.warning("WS timeout for %s (no ping for 60s)", username)
+                break
             except WebSocketDisconnect:
                 break
             except Exception as exc:
@@ -342,7 +407,11 @@ async def websocket_endpoint(ws: WebSocket, token: str) -> None:
 
             msg_type = payload.get("type", "message")
 
-            # ── Ping keepalive ──────────────────────────────────────────
+            if msg_type == "telemetry":
+                log.info("TELEMETRY from %s: %s", username, json.dumps(payload.get("data", {})))
+                continue
+
+            # Ping keepalive
             if msg_type == "ping":
                 try:
                     await ws.send_text(json.dumps({"type": "pong"}))
@@ -350,7 +419,28 @@ async def websocket_endpoint(ws: WebSocket, token: str) -> None:
                     break
                 continue
 
-            # ── Read receipt ────────────────────────────────────────────
+            if msg_type in CALL_SIGNAL_TYPES:
+                call_id = str(payload.get("callId", ""))[:100]
+                signal = {
+                    "type": msg_type,
+                    "from": username,
+                    "callId": call_id,
+                    "data": payload.get("data"),
+                }
+                delivered = await manager.send_to_others(username, signal)
+                if delivered == 0 and msg_type == "call:offer":
+                    await manager.send_to(
+                        username,
+                        {
+                            "type": "call:unavailable",
+                            "callId": call_id,
+                            "data": {"reason": "not_online"},
+                        },
+                    )
+                log.info("Call signal %s from %s delivered to %d peer(s)", msg_type, username, delivered)
+                continue
+
+            # Read receipt
             if msg_type == "read":
                 try:
                     await db_mark_read_by(username)
@@ -360,7 +450,7 @@ async def websocket_endpoint(ws: WebSocket, token: str) -> None:
                     log.error("read receipt error: %s", exc)
                 continue
 
-            # ── Chat message ────────────────────────────────────────────
+            # Chat message
             content = payload.get("content", "").strip()
             if not content or len(content) > 4000:
                 continue
@@ -385,3 +475,35 @@ async def websocket_endpoint(ws: WebSocket, token: str) -> None:
         except Exception as exc:
             log.error("status broadcast on disconnect: %s", exc)
         log.info("WS cleanup done: %s", username)
+
+@app.post("/upload")
+async def upload_image(file: UploadFile = File(...), username: str = Depends(require_user)):
+    try:
+        original_name = file.filename or ""
+        ext = os.path.splitext(original_name)[1].lower()
+        if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+            raise HTTPException(status_code=400, detail="Only JPG, PNG, GIF, and WEBP images are supported")
+
+        content_type = (file.content_type or "").lower()
+        if content_type and not content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail="Only image uploads are supported")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Upload file is empty")
+        if len(contents) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Image must be 8 MB or smaller")
+
+        filename = f"{uuid.uuid4().hex}{ext}"
+        filepath = os.path.join(UPLOAD_DIR, filename)
+
+        with open(filepath, "wb") as f:
+            f.write(contents)
+
+        log.info("Upload: %s -> %s (%d bytes)", username, filename, len(contents))
+        return {"url": f"/uploads/{filename}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Upload error for %s: %s", username, e)
+        raise HTTPException(status_code=500, detail="Upload failed")

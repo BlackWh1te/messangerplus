@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+backend/messages.db
+backend/uploads/
+patch_*.py

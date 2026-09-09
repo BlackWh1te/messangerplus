@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #171716;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
   height: 6px;
 }
@@ -13,16 +22,12 @@
   border-radius: 10px;
 }
 
-@keyframes animatedBackground {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-}
-
 .telegram-bg {
-    background: linear-gradient(-45deg, #0f172a, #1e1b4b, #020617, #172554);
-    background-size: 400% 400%;
-    animation: animatedBackground 15s ease infinite;
+    background-color: #171716;
+    background-image:
+      linear-gradient(135deg, rgba(20, 184, 166, 0.08) 0 1px, transparent 1px),
+      linear-gradient(45deg, rgba(244, 114, 182, 0.05) 0 1px, transparent 1px);
+    background-size: 28px 28px;
 }
 
 .slide-up-enter {

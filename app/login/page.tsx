@@ -27,39 +27,42 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex items-center justify-center h-[100dvh]">
-      <div className="bg-gray-900 rounded-2xl p-8 w-full max-w-sm shadow-2xl border border-gray-800">
-        <h1 className="text-2xl font-bold text-center mb-2 text-indigo-400">💬 MessengerPlus</h1>
-        <p className="text-gray-400 text-center text-sm mb-6">Private chat for two</p>
+    <div className="min-h-[100dvh] flex items-center justify-center px-4 py-8 bg-[#171716]">
+      <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-[#23211f] p-6 shadow-2xl">
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-teal-600 text-lg font-bold text-white shadow-lg">
+          MP
+        </div>
+        <h1 className="mb-1 text-center text-2xl font-semibold text-zinc-50">MessengerPlus</h1>
+        <p className="mb-6 text-center text-sm text-zinc-400">Sign in to continue</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Username</label>
+            <label className="block text-sm font-medium text-zinc-300 mb-1.5">Username</label>
             <input
               type="text"
               value={username}
               onChange={e => setUsername(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-lg border border-zinc-700 bg-[#171716] px-4 py-3 text-base text-white outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
               placeholder="user1"
               required
               autoComplete="username"
             />
           </div>
           <div>
-            <label className="block text-sm text-gray-400 mb-1">Password</label>
+            <label className="block text-sm font-medium text-zinc-300 mb-1.5">Password</label>
             <input
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-indigo-500"
-              placeholder="••••••"
+              className="w-full rounded-lg border border-zinc-700 bg-[#171716] px-4 py-3 text-base text-white outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20"
+              placeholder="Password"
               required
               autoComplete="current-password"
             />
           </div>
 
           {error && (
-            <div className="bg-red-900/40 border border-red-700 rounded-lg px-4 py-2 text-red-300 text-sm">
+            <div className="rounded-lg border border-rose-500/50 bg-rose-950/40 px-4 py-3 text-sm text-rose-100">
               {error}
             </div>
           )}
@@ -67,9 +70,9 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded-lg py-2 font-semibold transition-colors"
+            className="min-h-12 w-full rounded-lg bg-teal-600 px-4 py-3 font-semibold text-white transition hover:bg-teal-500 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-400"
           >
-            {loading ? 'Signing in…' : 'Sign in'}
+            {loading ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
       </div>

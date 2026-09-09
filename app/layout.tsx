@@ -6,7 +6,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#111827', // Tailwind gray-900 for mobile status bar
+  themeColor: '#23211f',
 }
 
 export const metadata: Metadata = {
@@ -17,7 +17,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-gray-950 text-white min-h-[100dvh] overscroll-none selection:bg-indigo-500/30">
+      <body className="bg-[#171716] text-white min-h-[100dvh] overscroll-none selection:bg-teal-500/30">
         {children}
       </body>
     </html>

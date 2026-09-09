@@ -1,66 +1,71 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://iodine-napkin-handcraft.ngrok-free.dev'
+const API = (process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 
-export async function POST(req: NextRequest, { params }: { params: { path: string[] } }) {
+function targetUrl(req: NextRequest, path: string[]) {
+  const currentUrl = new URL(req.url)
+  const backendPath = path.map(segment => encodeURIComponent(segment)).join('/')
+  return `${API}/${backendPath}${currentUrl.search}`
+}
+
+async function proxy(req: NextRequest, { params }: { params: { path: string[] } }) {
   try {
-    const targetUrl = `${API}/${params.path.join('/')}`
-    const body = req.body
-    const auth = req.headers.get('Authorization') || ''
-    
-    const response = await fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': req.headers.get('Content-Type') || 'application/json',
-        'Authorization': auth,
-        'ngrok-skip-browser-warning': '1'
-      },
-      body: body as any,
-      // @ts-ignore
-      duplex: 'half'
-    })
+    const headers = new Headers()
+    const auth = req.headers.get('Authorization')
+    const contentType = req.headers.get('Content-Type')
+    const accept = req.headers.get('Accept')
 
-    let data;
-    try {
-      data = await response.json()
-    } catch {
-      return new NextResponse(null, { status: response.status })
+    if (auth) headers.set('Authorization', auth)
+    if (contentType) headers.set('Content-Type', contentType)
+    if (accept) headers.set('Accept', accept)
+    headers.set('ngrok-skip-browser-warning', '1')
+
+    const init: RequestInit = {
+      method: req.method,
+      headers,
+      cache: 'no-store',
     }
-    return NextResponse.json(data, { status: response.status })
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      init.body = await req.arrayBuffer()
+    }
+
+    const response = await fetch(targetUrl(req, params.path), init)
+    const responseHeaders = new Headers()
+    const responseType = response.headers.get('Content-Type')
+    const responseCache = response.headers.get('Cache-Control')
+
+    if (responseType) responseHeaders.set('Content-Type', responseType)
+    if (responseCache) {
+      responseHeaders.set('Cache-Control', responseCache)
+    } else if (responseType && !responseType.includes('application/json')) {
+      responseHeaders.set('Cache-Control', 'public, max-age=31536000')
+    }
+
+    return new NextResponse(await response.arrayBuffer(), {
+      status: response.status,
+      headers: responseHeaders,
+    })
   } catch (err: any) {
-    return NextResponse.json({ detail: err.message }, { status: 500 })
+    const errorCode = crypto.randomUUID().slice(0, 10)
+    console.error('MessengerPlus proxy error', {
+      errorCode,
+      method: req.method,
+      path: params.path.join('/'),
+      target: API,
+      error: err?.message || String(err),
+    })
+    return NextResponse.json(
+      { detail: 'Messenger server is unreachable', error_code: errorCode },
+      { status: 502 },
+    )
   }
 }
 
+export async function POST(req: NextRequest, context: { params: { path: string[] } }) {
+  return proxy(req, context)
+}
+
 export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
-  try {
-    const targetUrl = `${API}/${params.path.join('/')}`
-    const auth = req.headers.get('Authorization') || ''
-    
-    const response = await fetch(targetUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': auth,
-        'ngrok-skip-browser-warning': '1'
-      }
-    })
-    
-    const contentType = response.headers.get('Content-Type')
-    if (contentType && contentType.includes('application/json')) {
-      const data = await response.json()
-      return NextResponse.json(data, { status: response.status })
-    }
-    
-    // Return raw buffer for images/files
-    const buffer = await response.arrayBuffer()
-    return new NextResponse(buffer, {
-      status: response.status,
-      headers: {
-        'Content-Type': contentType || 'application/octet-stream',
-        'Cache-Control': 'public, max-age=31536000'
-      }
-    })
-  } catch (err: any) {
-    return NextResponse.json({ detail: err.message }, { status: 500 })
-  }
+  return proxy(req, { params })
 }
