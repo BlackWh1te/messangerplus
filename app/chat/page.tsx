@@ -353,7 +353,7 @@ export default function ChatPage() {
   return (
     <div className="flex flex-col h-[100dvh] w-full max-w-3xl mx-auto bg-gray-950 overflow-hidden">
       {/* Header */}
-      <div className="bg-gray-900 border-b border-gray-800 px-4 py-2.5 flex items-center gap-3 shadow-md z-10 shrink-0 sticky top-0" style={{ paddingTop: 'max(env(safe-area-inset-top), 0.625rem)' }}>
+      <div className="bg-gray-900/85 backdrop-blur-md border-b border-gray-800/50 px-4 py-2.5 flex items-center gap-3 shadow-sm z-10 shrink-0 sticky top-0" style={{ paddingTop: 'max(env(safe-area-inset-top), 0.625rem)' }}>
         <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-sm shrink-0 relative">
           {otherUser.slice(0, 2).toUpperCase()}
           {otherStatus?.online && (
@@ -376,7 +376,7 @@ export default function ChatPage() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5 scroll-smooth overscroll-contain" style={{ background: 'linear-gradient(180deg, #0f0f13 0%, #111827 100%)' }}>
+      <div className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5 scroll-smooth overscroll-contain telegram-bg">
         {messages.length === 0 && (
           <div className="text-center text-gray-500 mt-20 text-sm bg-gray-900/50 py-2 px-4 rounded-full w-fit mx-auto">
             No messages yet. Say hi! 👋
@@ -445,36 +445,39 @@ export default function ChatPage() {
       </div>
 
 
-      {/* Sticker Picker */}
-      {showStickers && (
-        <div className="bg-gray-900 border-t border-gray-800 p-2 z-20 shrink-0 shadow-[0_-4px_10px_rgba(0,0,0,0.2)] relative">
-          <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar items-center">
-            {STICKERS.map(s => (
-              <img 
-                key={s} 
-                src={`/stickers/${s}`} 
-                alt="sticker" 
-                className="w-[72px] h-[72px] object-contain cursor-pointer hover:scale-110 active:scale-95 transition-transform shrink-0 drop-shadow-md" 
-                onClick={() => {
-                  sendMessage(undefined, `[sticker:${s}]`)
-                  setShowStickers(false)
-                }} 
-              />
-            ))}
-          </div>
+      {/* Sticker Picker Overlay */}
+      <div className={`bg-gray-900/90 backdrop-blur-xl border-t border-gray-800/50 pt-2 pb-3 px-2 z-20 shrink-0 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] absolute left-0 right-0 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${showStickers ? 'bottom-[60px] opacity-100 pointer-events-auto' : 'bottom-[40px] opacity-0 pointer-events-none'}`}>
+        <div className="flex gap-2.5 overflow-x-auto pb-2 custom-scrollbar items-center px-1">
+          {STICKERS.map(s => (
+            <img 
+              key={s} 
+              src={`/stickers/${s}`} 
+              alt="sticker" 
+              className="w-[72px] h-[72px] object-contain cursor-pointer hover:scale-110 hover:-translate-y-1 active:scale-95 transition-all shrink-0 drop-shadow-md" 
+              onClick={() => {
+                sendMessage(undefined, `[sticker:${s}]`)
+                setShowStickers(false)
+              }} 
+            />
+          ))}
         </div>
-      )}
+      </div>
 
       {/* Input */}
-      <div className="bg-gray-900 border-t border-gray-800 shrink-0 z-20" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>
+      <div className="bg-gray-900/85 backdrop-blur-xl border-t border-gray-800/50 shrink-0 z-30 relative" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>
         <form onSubmit={sendMessage} className="flex gap-2 items-end px-3 pt-3">
           <button
             type="button"
             onClick={() => setShowStickers(!showStickers)}
-            className="text-2xl opacity-70 hover:opacity-100 transition-opacity mb-[6px] touch-manipulation focus:outline-none select-none shrink-0"
+            className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${showStickers ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}
             title="Stickers"
           >
-            😎
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
+              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+              <line x1="9" y1="9" x2="9.01" y2="9" />
+              <line x1="15" y1="9" x2="15.01" y2="9" />
+            </svg>
           </button>
           <textarea
             value={input}
