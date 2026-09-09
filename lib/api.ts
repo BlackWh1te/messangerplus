@@ -5,11 +5,11 @@ export async function login(username: string, password: string) {
   form.append('username', username)
   form.append('password', password)
 
-  // Call Next.js proxy to bypass CORS
-  const res = await fetch(`/api/proxy/login`, {
+  const res = await fetch(`${NGROK_API}/login`, {
     method: 'POST',
     headers: { 
-      'Content-Type': 'application/x-www-form-urlencoded'
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'ngrok-skip-browser-warning': '1'
     },
     body: form.toString(),
   })
@@ -22,10 +22,10 @@ export async function login(username: string, password: string) {
 }
 
 export async function getMessages(token: string) {
-  // Call Next.js proxy to bypass CORS
-  const res = await fetch(`/api/proxy/messages`, {
+  const res = await fetch(`${NGROK_API}/messages`, {
     headers: { 
-      Authorization: `Bearer ${token}`
+      Authorization: `Bearer ${token}`,
+      'ngrok-skip-browser-warning': '1'
     },
   })
   if (res.status === 401 && typeof window !== 'undefined') window.location.href = '/login'
@@ -34,9 +34,10 @@ export async function getMessages(token: string) {
 }
 
 export async function getStatus(token: string) {
-  const res = await fetch(`/api/proxy/status`, {
+  const res = await fetch(`${NGROK_API}/status`, {
     headers: { 
-      Authorization: `Bearer ${token}`
+      Authorization: `Bearer ${token}`,
+      'ngrok-skip-browser-warning': '1'
     },
   })
   if (res.status === 401 && typeof window !== 'undefined') window.location.href = '/login'
@@ -45,11 +46,12 @@ export async function getStatus(token: string) {
 }
 
 export async function sendMessageHttp(token: string, content: string, nonce?: string) {
-  const res = await fetch(`/api/proxy/send`, {
+  const res = await fetch(`${NGROK_API}/send`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
+      'ngrok-skip-browser-warning': '1'
     },
     body: JSON.stringify({ content, nonce }),
   })
@@ -59,7 +61,6 @@ export async function sendMessageHttp(token: string, content: string, nonce?: st
 }
 
 export function getWsUrl(token: string) {
-  // WebSockets bypass CORS naturally, so we connect directly to ngrok
   const wsBase = NGROK_API.replace(/^http/, 'ws')
   return `${wsBase}/ws/${token}`
 }
@@ -71,7 +72,8 @@ export async function uploadImage(token: string, file: File) {
   const res = await fetch(`${NGROK_API}/upload`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`
+      Authorization: `Bearer ${token}`,
+      'ngrok-skip-browser-warning': '1'
     },
     body: formData
   })
