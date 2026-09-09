@@ -70,11 +70,12 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null)
   const tokenRef = useRef<string | null>(null)
   const usernameRef = useRef<string>('')
-  const queueRef = useRef<string[]>([])
   const seenIdsRef = useRef<Set<number>>(new Set())
   const reconnectRef = useRef<NodeJS.Timeout | null>(null)
   const pingRef = useRef<NodeJS.Timeout | null>(null)
   const destroyedRef = useRef(false)
+  const messagesRef = useRef<Message[]>([])
+  messagesRef.current = messages
 
   // Merge new messages from HTTP poll — no duplicates, no flash
   const mergeMessages = useCallback((fresh: Message[]) => {
@@ -125,8 +126,6 @@ export default function ChatPage() {
       getMessages(token).then(mergeMessages).catch(console.error)
 
       // Drain queued messages
-      while (queueRef.current.length > 0) {
-        const text = queueRef.current.shift()!
         sendMessage(undefined, text)
       }
 
@@ -261,7 +260,7 @@ export default function ChatPage() {
   useEffect(() => {
     const interval = setInterval(() => {
       if (connected) {
-        messages.forEach(m => {
+        messagesRef.current.forEach(m => {
           if (m.failed && typeof m.id === 'string') {
             sendMessage(undefined, m.content, m.id)
           }
@@ -269,7 +268,7 @@ export default function ChatPage() {
       }
     }, 5000)
     return () => clearInterval(interval)
-  }, [messages, connected])
+  }, [connected])
 
   function logout() {
     destroyedRef.current = true
@@ -282,7 +281,7 @@ export default function ChatPage() {
 
   const otherUser = Object.keys(statuses).find(u => u !== username) || 'Partner'
   const otherStatus = statuses[otherUser]
-  const pendingCount = queueRef.current.length
+  const failedCount = messages.filter(m => m.failed).length
 
   return (
     <div className="flex flex-col h-[100dvh] w-full max-w-3xl mx-auto bg-gray-950 overflow-hidden">
@@ -361,12 +360,6 @@ export default function ChatPage() {
         <div ref={bottomRef} className="h-2" />
       </div>
 
-      {/* Offline queue banner */}
-      {!connected && pendingCount > 0 && (
-        <div className="bg-yellow-900/90 border-t border-yellow-700/50 px-4 py-1.5 text-[11px] font-medium text-yellow-200 text-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-10">
-          ⏳ Waiting for network — {pendingCount} unsent message{pendingCount > 1 ? 's' : ''}
-        </div>
-      )}
 
       {/* Input */}
       <div className="bg-gray-900 border-t border-gray-800 shrink-0 z-20" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>

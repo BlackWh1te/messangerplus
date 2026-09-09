@@ -28,6 +28,7 @@ export async function getMessages(token: string) {
       Authorization: `Bearer ${token}`
     },
   })
+  if (res.status === 401 && typeof window !== 'undefined') window.location.href = '/login'
   if (!res.ok) throw new Error('Failed to load messages')
   return res.json()
 }
@@ -38,6 +39,7 @@ export async function getStatus(token: string) {
       Authorization: `Bearer ${token}`
     },
   })
+  if (res.status === 401 && typeof window !== 'undefined') window.location.href = '/login'
   if (!res.ok) throw new Error('Failed to load status')
   return res.json()
 }
@@ -51,6 +53,7 @@ export async function sendMessageHttp(token: string, content: string) {
     },
     body: JSON.stringify({ content }),
   })
+  if (res.status === 401 && typeof window !== 'undefined') window.location.href = '/login'
   if (!res.ok) throw new Error('Failed to send message')
   return res.json()
 }
