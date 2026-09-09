@@ -44,14 +44,14 @@ export async function getStatus(token: string) {
   return res.json()
 }
 
-export async function sendMessageHttp(token: string, content: string) {
+export async function sendMessageHttp(token: string, content: string, nonce?: string) {
   const res = await fetch(`/api/proxy/send`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, nonce }),
   })
   if (res.status === 401 && typeof window !== 'undefined') window.location.href = '/login'
   if (!res.ok) throw new Error('Failed to send message')

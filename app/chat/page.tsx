@@ -275,7 +275,7 @@ export default function ChatPage() {
 
     try {
       // 100% reliable sending via HTTP POST (fixes Android WS drops and double-send bugs)
-      const msg = await sendMessageHttp(token, text)
+      const msg = await sendMessageHttp(token, text, optimisticId)
       seenIdsRef.current.add(msg.id as number)
       
       setMessages(prev => {
