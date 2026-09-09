@@ -63,3 +63,20 @@ export function getWsUrl(token: string) {
   const wsBase = NGROK_API.replace(/^http/, 'ws')
   return `${wsBase}/ws/${token}`
 }
+
+export async function uploadImage(token: string, file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const res = await fetch(`${NGROK_API}/upload`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    body: formData
+  })
+  
+  if (res.status === 401 && typeof window !== 'undefined') window.location.href = '/login'
+  if (!res.ok) throw new Error('Upload failed')
+  return res.json()
+}

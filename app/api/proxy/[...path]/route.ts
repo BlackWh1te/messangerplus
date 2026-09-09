@@ -5,7 +5,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'https://iodine-napkin-handcraft.
 export async function POST(req: NextRequest, { params }: { params: { path: string[] } }) {
   try {
     const targetUrl = `${API}/${params.path.join('/')}`
-    const body = await req.text()
+    const body = req.body
     const auth = req.headers.get('Authorization') || ''
     
     const response = await fetch(targetUrl, {

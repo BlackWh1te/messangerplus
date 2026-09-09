@@ -3,6 +3,8 @@ import { useState, useEffect, useRef, useCallback, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { getMessages, getStatus, getWsUrl, sendMessageHttp } from '@/lib/api'
 import { gatherClientTelemetry } from '@/lib/telemetry'
+import EmojiPicker, { Theme } from 'emoji-picker-react'
+import { uploadImage } from '@/lib/api'
 
 const POLL_MS = 5000   // HTTP fallback poll every 5s
 const PING_MS = 15000  // WS keepalive ping every 15s (tighter for Android)
@@ -16,6 +18,7 @@ interface Message {
   read?: boolean | number
   pending?: boolean
   failed?: boolean
+  nonce?: string
 }
 
 interface UserStatus {
@@ -77,7 +80,9 @@ export default function ChatPage() {
   const [input, setInput] = useState('')
   const [username, setUsername] = useState('')
   const [connected, setConnected] = useState(false)
-  const [showStickers, setShowStickers] = useState(false)
+  const [pickerMode, setPickerMode] = useState<'none' | 'emoji' | 'sticker'>('none')
+  const [recentStickers, setRecentStickers] = useState<string[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -92,13 +97,13 @@ export default function ChatPage() {
   const messagesRef = useRef<Message[]>([])
   messagesRef.current = messages
 
-  // Merge new messages from HTTP poll — no duplicates, no flash
-  const mergeMessages = useCallback((fresh: Message[]) => {
+  // Merge new messages from HTTP poll
+  const mergeMessages = useCallback((fetched: Message[]) => {
     setMessages(prev => {
       let changed = false
       const updated = [...prev]
 
-      for (const msg of fresh) {
+      for (const msg of fetched) {
         const id = msg.id as number
         if (seenIdsRef.current.has(id)) {
           // Update delivery/read status on existing message
@@ -111,15 +116,18 @@ export default function ChatPage() {
             }
           }
         } else {
+          // Find matching pending message by nonce
+          const optIdx = updated.findIndex(m => m.pending && (m.id === msg.nonce || (m.content === msg.content && m.sender === msg.sender)))
+          if (optIdx !== -1) {
+             updated[optIdx] = msg
+          } else {
+             updated.push(msg)
+          }
           seenIdsRef.current.add(id)
-          // Remove matching optimistic
-          const optIdx = updated.findIndex(m => m.pending && m.content === msg.content && m.sender === msg.sender)
-          if (optIdx !== -1) updated.splice(optIdx, 1)
-          updated.push(msg)
           changed = true
         }
       }
-      return changed ? updated : prev
+      return changed ? updated.sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) : prev
     })
   }, [])
 
@@ -269,6 +277,11 @@ export default function ChatPage() {
   }, [router, connect, mergeMessages])
 
   useEffect(() => {
+    try {
+      const saved = localStorage.getItem('recentStickers')
+      if (saved) setRecentStickers(JSON.parse(saved))
+    } catch {}
+
     if (typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'default') {
         Notification.requestPermission()
@@ -276,6 +289,18 @@ export default function ChatPage() {
     }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!e.target.files || e.target.files.length === 0) return
+    const file = e.target.files[0]
+    e.target.value = '' // reset
+    try {
+      const res = await uploadImage(tokenRef.current!, file)
+      sendMessage(undefined, `[image:${res.url}]`)
+    } catch (err) {
+      alert('Upload failed: ' + err)
+    }
+  }
 
   async function sendMessage(e?: FormEvent, retryText?: string, retryId?: string) {
     if (e) e.preventDefault()
@@ -409,6 +434,18 @@ export default function ChatPage() {
                     </button>
                   )}
                   {(() => {
+                    const imageMatch = msg.content.match(/^\[image:(.+)\]$/);
+                    if (imageMatch) {
+                      return (
+                        <div className={`relative ${msg.pending ? 'opacity-75' : ''} ${msg.failed ? 'border border-red-500/50 rounded-lg p-1 bg-red-900/20' : ''}`}>
+                          <img src={imageMatch[1].startsWith('/') ? 'https://iodine-napkin-handcraft.ngrok-free.dev' + imageMatch[1] : imageMatch[1]} alt="image" className="max-w-[200px] sm:max-w-xs rounded-xl shadow-md" loading="lazy" />
+                          <span className={`absolute bottom-2 right-2 text-[10px] whitespace-nowrap inline-flex items-center px-1.5 py-0.5 rounded-full bg-black/40 text-white/90 shadow-sm backdrop-blur-sm`}>
+                            {formatTime(msg.timestamp)}
+                            {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
+                          </span>
+                        </div>
+                      )
+                    }
                     const stickerMatch = msg.content.match(/^\[sticker:(.+)\]$/);
                     if (stickerMatch) {
                       return (
@@ -445,39 +482,77 @@ export default function ChatPage() {
       </div>
 
 
-      {/* Sticker Picker Overlay */}
-      <div className={`bg-gray-900/90 backdrop-blur-xl border-t border-gray-800/50 pt-2 pb-3 px-2 z-20 shrink-0 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] absolute left-0 right-0 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${showStickers ? 'bottom-[60px] opacity-100 pointer-events-auto' : 'bottom-[40px] opacity-0 pointer-events-none'}`}>
-        <div className="flex gap-2.5 overflow-x-auto pb-2 custom-scrollbar items-center px-1">
-          {STICKERS.map(s => (
-            <img 
-              key={s} 
-              src={`/stickers/${s}`} 
-              alt="sticker" 
-              className="w-[72px] h-[72px] object-contain cursor-pointer hover:scale-110 hover:-translate-y-1 active:scale-95 transition-all shrink-0 drop-shadow-md" 
-              onClick={() => {
-                sendMessage(undefined, `[sticker:${s}]`)
-                setShowStickers(false)
-              }} 
-            />
-          ))}
-        </div>
+      {/* Picker Overlays */}
+      <div className={`bg-gray-900/95 backdrop-blur-xl border-t border-gray-800/50 pt-2 pb-3 px-2 z-20 shrink-0 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] absolute left-0 right-0 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${(pickerMode !== 'none') ? 'bottom-[60px] opacity-100 pointer-events-auto' : 'bottom-[40px] opacity-0 pointer-events-none'}`}>
+        {pickerMode === 'emoji' && (
+          <div className="flex justify-center w-full max-h-[300px] overflow-hidden">
+            <EmojiPicker theme={Theme.DARK} width="100%" onEmojiClick={(e) => setInput(prev => prev + e.emoji)} />
+          </div>
+        )}
+        {pickerMode === 'sticker' && (
+          <div className="flex flex-col gap-3 w-full max-h-[300px] overflow-y-auto custom-scrollbar px-1">
+            {recentStickers.length > 0 && (
+              <div>
+                <div className="text-[10px] text-gray-400 font-medium uppercase tracking-wider mb-1">Recent</div>
+                <div className="flex gap-2.5 overflow-x-auto pb-2 custom-scrollbar items-center">
+                  {recentStickers.map(s => (
+                    <img 
+                      key={s} 
+                      src={`/stickers/${s}`} 
+                      alt="sticker" 
+                      className="w-[72px] h-[72px] object-contain cursor-pointer hover:scale-110 hover:-translate-y-1 active:scale-95 transition-all shrink-0 drop-shadow-md" 
+                      onClick={() => {
+                        sendMessage(undefined, `[sticker:${s}]`)
+                        setPickerMode('none')
+                        setRecentStickers(prev => {
+                          const next = [s, ...prev.filter(x => x !== s)].slice(0, 10)
+                          localStorage.setItem('recentStickers', JSON.stringify(next))
+                          return next
+                        })
+                      }} 
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div>
+              <div className="text-[10px] text-gray-400 font-medium uppercase tracking-wider mb-1">All Stickers</div>
+              <div className="flex gap-2.5 overflow-x-auto pb-2 custom-scrollbar items-center flex-wrap">
+                {STICKERS.map(s => (
+                  <img 
+                    key={s} 
+                    src={`/stickers/${s}`} 
+                    alt="sticker" 
+                    className="w-[72px] h-[72px] object-contain cursor-pointer hover:scale-110 hover:-translate-y-1 active:scale-95 transition-all shrink-0 drop-shadow-md" 
+                    onClick={() => {
+                      sendMessage(undefined, `[sticker:${s}]`)
+                      setPickerMode('none')
+                      setRecentStickers(prev => {
+                        const next = [s, ...prev.filter(x => x !== s)].slice(0, 10)
+                        localStorage.setItem('recentStickers', JSON.stringify(next))
+                        return next
+                      })
+                    }} 
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Input */}
       <div className="bg-gray-900/85 backdrop-blur-xl border-t border-gray-800/50 shrink-0 z-30 relative" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>
         <form onSubmit={sendMessage} className="flex gap-2 items-end px-3 pt-3">
-          <button
-            type="button"
-            onClick={() => setShowStickers(!showStickers)}
-            className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${showStickers ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}
-            title="Stickers"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
-              <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-              <line x1="9" y1="9" x2="9.01" y2="9" />
-              <line x1="15" y1="9" x2="15.01" y2="9" />
-            </svg>
+          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleUpload} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center text-gray-400 hover:bg-gray-800 hover:text-gray-200" title="Upload Image">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          </button>
+          <button type="button" onClick={() => setPickerMode(pickerMode === 'emoji' ? 'none' : 'emoji')} className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${pickerMode === 'emoji' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`} title="Emojis">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+          </button>
+          <button type="button" onClick={() => setPickerMode(pickerMode === 'sticker' ? 'none' : 'sticker')} className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${pickerMode === 'sticker' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`} title="Stickers">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 2v20"/><path d="M2 12h20"/></svg>
           </button>
           <textarea
             value={input}
