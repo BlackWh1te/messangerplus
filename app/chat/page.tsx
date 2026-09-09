@@ -73,6 +73,8 @@ export default function ChatPage() {
   const seenIdsRef = useRef<Set<number>>(new Set())
   const reconnectRef = useRef<NodeJS.Timeout | null>(null)
   const pingRef = useRef<NodeJS.Timeout | null>(null)
+  const pongTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const backoffRef = useRef(1000)
   const destroyedRef = useRef(false)
   const messagesRef = useRef<Message[]>([])
   messagesRef.current = messages
@@ -132,9 +134,17 @@ export default function ChatPage() {
       // Send read receipt
       ws.send(JSON.stringify({ type: 'read' }))
 
+      backoffRef.current = 1000 // Reset backoff on success
       if (pingRef.current) clearInterval(pingRef.current)
       pingRef.current = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }))
+          if (pongTimeoutRef.current) clearTimeout(pongTimeoutRef.current)
+          pongTimeoutRef.current = setTimeout(() => {
+            console.warn('Ping timeout, closing frozen socket')
+            ws.close()
+          }, 5000)
+        }
       }, PING_MS)
     }
 
@@ -142,8 +152,10 @@ export default function ChatPage() {
       if (destroyedRef.current) return
       setConnected(false)
       if (pingRef.current) clearInterval(pingRef.current)
-      // Reconnect every 3s
-      reconnectRef.current = setTimeout(connect, 3000)
+      if (pongTimeoutRef.current) clearTimeout(pongTimeoutRef.current)
+      
+      reconnectRef.current = setTimeout(connect, backoffRef.current)
+      backoffRef.current = Math.min(backoffRef.current * 1.5, 10000)
     }
 
     ws.onerror = () => ws.close()
@@ -152,6 +164,11 @@ export default function ChatPage() {
       if (destroyedRef.current) return
       try {
         const payload = JSON.parse(e.data)
+
+        if (payload.type === 'pong') {
+          if (pongTimeoutRef.current) clearTimeout(pongTimeoutRef.current)
+          return
+        }
 
         if (payload.type === 'message') {
           const msg: Message = payload.data
@@ -203,13 +220,26 @@ export default function ChatPage() {
 
     connect()
 
+    const handleWake = () => {
+      if (document.visibilityState === 'visible' || navigator.onLine) {
+        if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) connect()
+        // Always try to fetch messages when waking up in case WS reconnect is slow
+        getMessages(token).then(mergeMessages).catch(() => {})
+      }
+    }
+    document.addEventListener('visibilitychange', handleWake)
+    window.addEventListener('online', handleWake)
+
     return () => {
+      document.removeEventListener('visibilitychange', handleWake)
+      window.removeEventListener('online', handleWake)
       destroyedRef.current = true
       if (reconnectRef.current) clearTimeout(reconnectRef.current)
       if (pingRef.current) clearInterval(pingRef.current)
+      if (pongTimeoutRef.current) clearTimeout(pongTimeoutRef.current)
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close() }
     }
-  }, [router, connect])
+  }, [router, connect, mergeMessages])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -274,6 +304,7 @@ export default function ChatPage() {
     destroyedRef.current = true
     if (reconnectRef.current) clearTimeout(reconnectRef.current)
     if (pingRef.current) clearInterval(pingRef.current)
+    if (pongTimeoutRef.current) clearTimeout(pongTimeoutRef.current)
     wsRef.current?.close()
     localStorage.clear()
     router.replace('/login')
