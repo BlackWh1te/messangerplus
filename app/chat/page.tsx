@@ -60,6 +60,16 @@ function Ticks({ pending, delivered, read }: { pending?: boolean; delivered?: bo
   )
 }
 
+const STICKERS = [
+  '1917-nom-fast.png', '2026-smoking-rat.jpg', '25111-shhh.png', '25939-is-grass-green.png',
+  '27859-cronchycat.gif', '3067-li.jpg', '3503-hi.png', '3764-maxwell-4.gif', '3779-anime.png',
+  '3837-yellow-joobi-neutral.png', '4156-.png', '4238-cat-pee.gif', '4424-noko-shake.png',
+  '4588-kobeni.png', '5117-lol.png', '5649-rose.png', '59491-vegeta.png', '6543-stop-pls.png',
+  '6835-deku.jpg', '7629-megumi.png', '7818-babyboo-meme-12.png', '8301-pepe-21.png',
+  '8462-uh-oh.png', '8651-cat-reaction-3.png', '8697-sybau.png', '8709-gatos-memes.png',
+  '9144-the-rock.png', '92746-uh-oh.png', '99333-absolute-cinema.png'
+]
+
 export default function ChatPage() {
   const router = useRouter()
   const [messages, setMessages] = useState<Message[]>([])
@@ -67,6 +77,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('')
   const [username, setUsername] = useState('')
   const [connected, setConnected] = useState(false)
+  const [showStickers, setShowStickers] = useState(false)
 
   const wsRef = useRef<WebSocket | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -187,9 +198,16 @@ export default function ChatPage() {
               return [...without, msg]
             })
           }
-          // Send read receipt for incoming messages
-          if (msg.sender !== usernameRef.current && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'read' }))
+          // Notify or Read
+          if (msg.sender !== usernameRef.current) {
+            if (document.visibilityState === 'visible') {
+              if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'read' }))
+            } else {
+              if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+                const n = new Notification(`Message from ${msg.sender}`, { body: msg.content })
+                n.onclick = () => { window.focus(); n.close() }
+              }
+            }
           }
         } else if (payload.type === 'status') {
           setStatuses(payload.data)
@@ -231,6 +249,9 @@ export default function ChatPage() {
         if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) connect()
         // Always try to fetch messages when waking up in case WS reconnect is slow
         getMessages(token).then(mergeMessages).catch(() => {})
+        if (document.visibilityState === 'visible' && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'read' }))
+        }
       }
     }
     document.addEventListener('visibilitychange', handleWake)
@@ -248,6 +269,11 @@ export default function ChatPage() {
   }, [router, connect, mergeMessages])
 
   useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission()
+      }
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
@@ -274,6 +300,10 @@ export default function ChatPage() {
     }
 
     try {
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission()
+      }
+
       // 100% reliable sending via HTTP POST (fixes Android WS drops and double-send bugs)
       const msg = await sendMessageHttp(token, text, optimisticId)
       seenIdsRef.current.add(msg.id as number)
@@ -378,17 +408,34 @@ export default function ChatPage() {
                       ↻ Retry
                     </button>
                   )}
-                  <div className={`px-3 py-2 text-[15px] leading-[1.4] break-words shadow-sm relative ${
-                    isMe
-                      ? `bg-indigo-600 text-white rounded-[18px] rounded-br-[4px] ${msg.pending ? 'opacity-75' : ''} ${msg.failed ? 'bg-red-900/80 border border-red-500/30' : ''}`
-                      : 'bg-gray-800 text-gray-100 rounded-[18px] rounded-bl-[4px]'
-                  }`}>
-                    <span className="inline-block mr-1">{msg.content}</span>
-                    <span className={`text-[10px] whitespace-nowrap inline-flex items-center translate-y-[2px] ${isMe ? 'text-indigo-200' : 'text-gray-400'}`}>
-                      {formatTime(msg.timestamp)}
-                      {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
-                    </span>
-                  </div>
+                  {(() => {
+                    const stickerMatch = msg.content.match(/^\[sticker:(.+)\]$/);
+                    if (stickerMatch) {
+                      return (
+                        <div className={`relative ${msg.pending ? 'opacity-75' : ''} ${msg.failed ? 'border border-red-500/50 rounded-lg p-1 bg-red-900/20' : ''}`}>
+                          <img src={`/stickers/${stickerMatch[1]}`} alt="sticker" className="w-32 h-32 object-contain drop-shadow-md" loading="lazy" />
+                          <span className={`absolute bottom-1 right-2 text-[10px] whitespace-nowrap inline-flex items-center px-1.5 py-0.5 rounded-full bg-black/40 text-white/90 shadow-sm backdrop-blur-sm`}>
+                            {formatTime(msg.timestamp)}
+                            {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
+                          </span>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <div className={`px-3 py-2 text-[15px] leading-[1.4] break-words shadow-sm relative ${
+                        isMe
+                          ? `bg-indigo-600 text-white rounded-[18px] rounded-br-[4px] ${msg.pending ? 'opacity-75' : ''} ${msg.failed ? 'bg-red-900/80 border border-red-500/30' : ''}`
+                          : 'bg-gray-800 text-gray-100 rounded-[18px] rounded-bl-[4px]'
+                      }`}>
+                        <span className="inline-block mr-1 whitespace-pre-wrap">{msg.content}</span>
+                        <span className={`text-[10px] whitespace-nowrap inline-flex items-center translate-y-[2px] ${isMe ? 'text-indigo-200' : 'text-gray-400'}`}>
+                          {formatTime(msg.timestamp)}
+                          {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
+                        </span>
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
             </div>
@@ -398,9 +445,37 @@ export default function ChatPage() {
       </div>
 
 
+      {/* Sticker Picker */}
+      {showStickers && (
+        <div className="bg-gray-900 border-t border-gray-800 p-2 z-20 shrink-0 shadow-[0_-4px_10px_rgba(0,0,0,0.2)] relative">
+          <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar items-center">
+            {STICKERS.map(s => (
+              <img 
+                key={s} 
+                src={`/stickers/${s}`} 
+                alt="sticker" 
+                className="w-[72px] h-[72px] object-contain cursor-pointer hover:scale-110 active:scale-95 transition-transform shrink-0 drop-shadow-md" 
+                onClick={() => {
+                  sendMessage(undefined, `[sticker:${s}]`)
+                  setShowStickers(false)
+                }} 
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Input */}
       <div className="bg-gray-900 border-t border-gray-800 shrink-0 z-20" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>
         <form onSubmit={sendMessage} className="flex gap-2 items-end px-3 pt-3">
+          <button
+            type="button"
+            onClick={() => setShowStickers(!showStickers)}
+            className="text-2xl opacity-70 hover:opacity-100 transition-opacity mb-[6px] touch-manipulation focus:outline-none select-none shrink-0"
+            title="Stickers"
+          >
+            😎
+          </button>
           <textarea
             value={input}
             onChange={e => setInput(e.target.value)}
