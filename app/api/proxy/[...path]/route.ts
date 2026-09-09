@@ -15,7 +15,9 @@ export async function POST(req: NextRequest, { params }: { params: { path: strin
         'Authorization': auth,
         'ngrok-skip-browser-warning': '1'
       },
-      body
+      body: body as any,
+      // @ts-ignore
+      duplex: 'half'
     })
 
     let data;
@@ -42,9 +44,22 @@ export async function GET(req: NextRequest, { params }: { params: { path: string
         'ngrok-skip-browser-warning': '1'
       }
     })
-
-    const data = await response.json()
-    return NextResponse.json(data, { status: response.status })
+    
+    const contentType = response.headers.get('Content-Type')
+    if (contentType && contentType.includes('application/json')) {
+      const data = await response.json()
+      return NextResponse.json(data, { status: response.status })
+    }
+    
+    // Return raw buffer for images/files
+    const buffer = await response.arrayBuffer()
+    return new NextResponse(buffer, {
+      status: response.status,
+      headers: {
+        'Content-Type': contentType || 'application/octet-stream',
+        'Cache-Control': 'public, max-age=31536000'
+      }
+    })
   } catch (err: any) {
     return NextResponse.json({ detail: err.message }, { status: 500 })
   }

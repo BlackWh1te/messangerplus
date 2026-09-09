@@ -438,7 +438,7 @@ export default function ChatPage() {
                     if (imageMatch) {
                       return (
                         <div className={`relative ${msg.pending ? 'opacity-75' : ''} ${msg.failed ? 'border border-red-500/50 rounded-lg p-1 bg-red-900/20' : ''}`}>
-                          <img src={imageMatch[1].startsWith('/') ? 'https://iodine-napkin-handcraft.ngrok-free.dev' + imageMatch[1] : imageMatch[1]} alt="image" className="max-w-[200px] sm:max-w-xs rounded-xl shadow-md" loading="lazy" />
+                          <img src={imageMatch[1].startsWith('/') ? '/api/proxy' + imageMatch[1] : imageMatch[1]} alt="image" className="max-w-[200px] sm:max-w-xs rounded-xl shadow-md" loading="lazy" />
                           <span className={`absolute bottom-2 right-2 text-[10px] whitespace-nowrap inline-flex items-center px-1.5 py-0.5 rounded-full bg-black/40 text-white/90 shadow-sm backdrop-blur-sm`}>
                             {formatTime(msg.timestamp)}
                             {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
@@ -482,8 +482,52 @@ export default function ChatPage() {
       </div>
 
 
+      {/* Input */}
+      <div className="bg-gray-900/85 backdrop-blur-xl border-t border-gray-800/50 shrink-0 z-30 relative" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>
+        <form onSubmit={sendMessage} className="flex gap-2 items-end px-3 pt-3">
+          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleUpload} />
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center text-gray-400 hover:bg-gray-800 hover:text-gray-200" title="Upload Image">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          </button>
+          <button type="button" onClick={() => setPickerMode(pickerMode === 'emoji' ? 'none' : 'emoji')} className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${pickerMode === 'emoji' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`} title="Emojis">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+          </button>
+          <button type="button" onClick={() => setPickerMode(pickerMode === 'sticker' ? 'none' : 'sticker')} className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${pickerMode === 'sticker' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`} title="Stickers">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 2v20"/><path d="M2 12h20"/></svg>
+          </button>
+          <textarea
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="Message"
+            className="flex-1 bg-gray-800 border border-gray-700 rounded-[20px] px-4 py-[10px] text-white focus:outline-none focus:border-indigo-500 text-[16px] placeholder-gray-500 resize-none min-h-[44px] max-h-[120px]"
+            autoComplete="off"
+            rows={1}
+            maxLength={2000}
+            onInput={(e) => {
+              const target = e.target as HTMLTextAreaElement;
+              target.style.height = 'auto';
+              target.style.height = Math.min(target.scrollHeight, 120) + 'px';
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (input.trim()) sendMessage(e as any)
+              }
+            }}
+          />
+          <button
+            type="submit"
+            disabled={!input.trim()}
+            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:bg-gray-700 rounded-full w-[44px] h-[44px] flex items-center justify-center shrink-0 transition-colors active:scale-95 touch-manipulation mb-[2px]"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-[18px] h-[18px] text-white rotate-45 translate-x-[-1px] translate-y-[1px]">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+          </button>
+        </form>
+      </div>
       {/* Picker Overlays */}
-      <div className={`bg-gray-900/95 backdrop-blur-xl border-t border-gray-800/50 pt-2 pb-3 px-2 z-20 shrink-0 shadow-[0_-10px_30px_rgba(0,0,0,0.5)] absolute left-0 right-0 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] ${(pickerMode !== 'none') ? 'bottom-[60px] opacity-100 pointer-events-auto' : 'bottom-[40px] opacity-0 pointer-events-none'}`}>
+      <div className={`bg-gray-900 z-20 shrink-0 transition-all duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] overflow-hidden flex flex-col ${(pickerMode !== 'none') ? 'h-[300px] border-t border-gray-800/50 pt-2' : 'h-0 border-t-0'}`}>
         {pickerMode === 'emoji' && (
           <div className="flex justify-center w-full max-h-[300px] overflow-hidden">
             <EmojiPicker theme={Theme.DARK} width="100%" onEmojiClick={(e) => setInput(prev => prev + e.emoji)} />
@@ -541,50 +585,6 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* Input */}
-      <div className="bg-gray-900/85 backdrop-blur-xl border-t border-gray-800/50 shrink-0 z-30 relative" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 0.75rem)' }}>
-        <form onSubmit={sendMessage} className="flex gap-2 items-end px-3 pt-3">
-          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleUpload} />
-          <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center text-gray-400 hover:bg-gray-800 hover:text-gray-200" title="Upload Image">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-          </button>
-          <button type="button" onClick={() => setPickerMode(pickerMode === 'emoji' ? 'none' : 'emoji')} className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${pickerMode === 'emoji' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`} title="Emojis">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-          </button>
-          <button type="button" onClick={() => setPickerMode(pickerMode === 'sticker' ? 'none' : 'sticker')} className={`p-2 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${pickerMode === 'sticker' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`} title="Stickers">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-6 h-6" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 2v20"/><path d="M2 12h20"/></svg>
-          </button>
-          <textarea
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            placeholder="Message"
-            className="flex-1 bg-gray-800 border border-gray-700 rounded-[20px] px-4 py-[10px] text-white focus:outline-none focus:border-indigo-500 text-[16px] placeholder-gray-500 resize-none min-h-[44px] max-h-[120px]"
-            autoComplete="off"
-            rows={1}
-            maxLength={2000}
-            onInput={(e) => {
-              const target = e.target as HTMLTextAreaElement;
-              target.style.height = 'auto';
-              target.style.height = Math.min(target.scrollHeight, 120) + 'px';
-            }}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                if (input.trim()) sendMessage(e as any)
-              }
-            }}
-          />
-          <button
-            type="submit"
-            disabled={!input.trim()}
-            className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 disabled:bg-gray-700 rounded-full w-[44px] h-[44px] flex items-center justify-center shrink-0 transition-colors active:scale-95 touch-manipulation mb-[2px]"
-          >
-            <svg viewBox="0 0 24 24" fill="currentColor" className="w-[18px] h-[18px] text-white rotate-45 translate-x-[-1px] translate-y-[1px]">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-            </svg>
-          </button>
-        </form>
-      </div>
     </div>
   )
 }
