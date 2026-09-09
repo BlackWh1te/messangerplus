@@ -74,7 +74,6 @@ export default function ChatPage() {
   const seenIdsRef = useRef<Set<number>>(new Set())
   const reconnectRef = useRef<NodeJS.Timeout | null>(null)
   const pingRef = useRef<NodeJS.Timeout | null>(null)
-  const pollRef = useRef<NodeJS.Timeout | null>(null)
   const destroyedRef = useRef(false)
 
   // Merge new messages from HTTP poll — no duplicates, no flash
@@ -108,16 +107,7 @@ export default function ChatPage() {
     })
   }, [])
 
-  const startPolling = useCallback((token: string) => {
-    if (pollRef.current) clearInterval(pollRef.current)
-    pollRef.current = setInterval(async () => {
-      if (destroyedRef.current) return
-      try {
-        const msgs = await getMessages(token)
-        mergeMessages(msgs)
-      } catch { /* network error — silently ignore */ }
-    }, POLL_MS)
-  }, [mergeMessages])
+
 
   const connect = useCallback(() => {
     const token = tokenRef.current
@@ -131,10 +121,13 @@ export default function ChatPage() {
       if (destroyedRef.current) { ws.close(); return }
       setConnected(true)
 
+      // Fetch any messages we missed while disconnected
+      getMessages(token).then(mergeMessages).catch(console.error)
+
       // Drain queued messages
       while (queueRef.current.length > 0) {
         const text = queueRef.current.shift()!
-        ws.send(JSON.stringify({ content: text }))
+        sendMessage(undefined, text)
       }
 
       // Send read receipt
@@ -210,16 +203,14 @@ export default function ChatPage() {
     getStatus(token).then(setStatuses).catch(console.error)
 
     connect()
-    startPolling(token)
 
     return () => {
       destroyedRef.current = true
       if (reconnectRef.current) clearTimeout(reconnectRef.current)
       if (pingRef.current) clearInterval(pingRef.current)
-      if (pollRef.current) clearInterval(pollRef.current)
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close() }
     }
-  }, [router, connect, startPolling])
+  }, [router, connect])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -247,27 +238,22 @@ export default function ChatPage() {
       setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: false, pending: true } : m))
     }
 
-    // Try WebSocket first (instant), always back up with HTTP POST
-    const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ content: text }))
-      // HTTP POST confirms delivery even if WS echo is lost
-      try { 
-        const msg = await sendMessageHttp(token, text) 
-        seenIdsRef.current.add(msg.id as number)
-        setMessages(prev => prev.map(m => m.id === optimisticId ? msg : m))
-      } catch { /* WS might have sent it, but if both fail, it's stuck pending, we'll let polling fix it or mark failed later */ }
-    } else {
-      // WS unavailable — use HTTP POST as primary
-      try {
-        const msg = await sendMessageHttp(token, text)
-        // Replace optimistic with real message
-        seenIdsRef.current.add(msg.id as number)
-        setMessages(prev => prev.map(m => m.id === optimisticId ? msg : m))
-      } catch {
-        // Mark as failed
-        setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: true, pending: false } : m))
-      }
+    try {
+      // 100% reliable sending via HTTP POST (fixes Android WS drops and double-send bugs)
+      const msg = await sendMessageHttp(token, text)
+      seenIdsRef.current.add(msg.id as number)
+      
+      setMessages(prev => {
+        // If WS echo beat us to it, the message is already real.
+        const alreadyReal = prev.find(m => m.id === msg.id)
+        if (alreadyReal) return prev
+        
+        // Otherwise replace the optimistic message
+        return prev.map(m => m.id === optimisticId ? msg : m)
+      })
+    } catch {
+      // Mark as failed if HTTP request fails (network down)
+      setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: true, pending: false } : m))
     }
   }
 
@@ -289,7 +275,6 @@ export default function ChatPage() {
     destroyedRef.current = true
     if (reconnectRef.current) clearTimeout(reconnectRef.current)
     if (pingRef.current) clearInterval(pingRef.current)
-    if (pollRef.current) clearInterval(pollRef.current)
     wsRef.current?.close()
     localStorage.clear()
     router.replace('/login')
