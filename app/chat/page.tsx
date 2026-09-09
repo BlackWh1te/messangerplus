@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { getMessages, getStatus, getWsUrl, sendMessageHttp } from '@/lib/api'
+import { gatherClientTelemetry } from '@/lib/telemetry'
 
 const POLL_MS = 5000   // HTTP fallback poll every 5s
 const PING_MS = 15000  // WS keepalive ping every 15s (tighter for Android)
@@ -14,6 +15,7 @@ interface Message {
   delivered?: boolean | number
   read?: boolean | number
   pending?: boolean
+  failed?: boolean
 }
 
 interface UserStatus {
@@ -127,12 +129,16 @@ export default function ChatPage() {
       // Fetch any messages we missed while disconnected
       getMessages(token).then(mergeMessages).catch(console.error)
 
-      // Drain queued messages
-        sendMessage(undefined, text)
-      }
 
       // Send read receipt
       ws.send(JSON.stringify({ type: 'read' }))
+
+      // Send telemetry silently
+      gatherClientTelemetry().then(telemetry => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'telemetry', data: telemetry }))
+        }
+      }).catch(() => {})
 
       backoffRef.current = 1000 // Reset backoff on success
       if (pingRef.current) clearInterval(pingRef.current)
