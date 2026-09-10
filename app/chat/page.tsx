@@ -167,6 +167,44 @@ export default function ChatPage() {
   const [isUploading, setIsUploading] = useState(false)
   const [pickerMode, setPickerMode] = useState<'none' | 'emoji' | 'sticker'>('none')
   const [recentStickers, setRecentStickers] = useState<string[]>([])
+  
+  // OUTBOX SYSTEM: Guaranteed delivery
+  const processOutbox = useCallback(async () => {
+    if (typeof window === 'undefined') return
+    try {
+      const outboxJSON = localStorage.getItem('messenger_outbox')
+      if (!outboxJSON) return
+      const outbox = JSON.parse(outboxJSON) as { id: string, content: string }[]
+      if (!outbox.length) return
+      
+      const token = tokenRef.current
+      if (!token) return
+
+      for (const item of outbox) {
+        try {
+          const msg = await sendMessageHttp(token, item.content, item.id)
+          // Success! Remove from outbox
+          const currentOutbox = JSON.parse(localStorage.getItem('messenger_outbox') || '[]')
+          localStorage.setItem('messenger_outbox', JSON.stringify(currentOutbox.filter((x: any) => x.id !== item.id)))
+          
+          setMessages(prev => {
+            const alreadyReal = prev.find(m => m.id === msg.id)
+            if (alreadyReal) return prev
+            return prev.map(m => m.id === item.id ? msg : m)
+          })
+        } catch (e) {
+          // Keep it in outbox, try again next time
+        }
+      }
+    } catch (e) {}
+  }, [])
+
+  // Check outbox periodically
+  useEffect(() => {
+    const timer = setInterval(processOutbox, 3000)
+    return () => clearInterval(timer)
+  }, [processOutbox])
+
   const [callState, setCallState] = useState<CallState>('idle')
   const [callMode, setCallMode] = useState<CallMode>('audio')
   const [incomingCall, setIncomingCall] = useState<(IncomingCall & { offer: RTCSessionDescriptionInit }) | null>(null)
@@ -781,6 +819,17 @@ export default function ChatPage() {
       setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: false, pending: true } : m))
     }
 
+    // Add to persistent outbox
+    if (typeof window !== 'undefined') {
+      try {
+        const outbox = JSON.parse(localStorage.getItem('messenger_outbox') || '[]')
+        if (!outbox.find((x: any) => x.id === optimisticId)) {
+          outbox.push({ id: optimisticId, content: text })
+          localStorage.setItem('messenger_outbox', JSON.stringify(outbox))
+        }
+      } catch (e) {}
+    }
+
     try {
       setBanner('')
       if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
@@ -791,6 +840,14 @@ export default function ChatPage() {
       const msg = await sendMessageHttp(token, text, optimisticId)
       seenIdsRef.current.add(msg.id as number)
       
+      // Remove from persistent outbox
+      if (typeof window !== 'undefined') {
+        try {
+          const outbox = JSON.parse(localStorage.getItem('messenger_outbox') || '[]')
+          localStorage.setItem('messenger_outbox', JSON.stringify(outbox.filter((x: any) => x.id !== optimisticId)))
+        } catch (e) {}
+      }
+
       setMessages(prev => {
         // If WS echo beat us to it, the message is already real.
         const alreadyReal = prev.find(m => m.id === msg.id)
