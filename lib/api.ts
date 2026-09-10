@@ -97,3 +97,18 @@ export async function uploadImage(token: string, file: File) {
   if (!res.ok) throw new Error(await errorMessage(res, 'Upload failed'))
   return res.json()
 }
+
+export async function sendLog(token: string, level: 'info' | 'warn' | 'error', event: string, data: any = {}) {
+  try {
+    await fetch(apiUrl('log'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ level, event, data })
+    })
+  } catch (e) {
+    // silently fail
+  }
+}

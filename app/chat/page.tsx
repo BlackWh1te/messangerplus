@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useRef, useCallback, FormEvent } from 'react'
 import { useRouter } from 'next/navigation'
-import { getMessages, getStatus, getWsUrl, sendMessageHttp } from '@/lib/api'
+import { getMessages, getStatus, getWsUrl, sendMessageHttp, sendLog } from '@/lib/api'
 import { gatherClientTelemetry } from '@/lib/telemetry'
 import EmojiPicker, { Theme } from 'emoji-picker-react'
 import { uploadImage } from '@/lib/api'
@@ -182,7 +182,9 @@ export default function ChatPage() {
 
       for (const item of outbox) {
         try {
+          sendLog(token, 'info', 'OUTBOX_RETRY_START', { id: item.id, length: item.content.length })
           const msg = await sendMessageHttp(token, item.content, item.id)
+          sendLog(token, 'info', 'OUTBOX_RETRY_SUCCESS', { id: item.id })
           // Success! Remove from outbox
           const currentOutbox = JSON.parse(localStorage.getItem('messenger_outbox') || '[]')
           localStorage.setItem('messenger_outbox', JSON.stringify(currentOutbox.filter((x: any) => x.id !== item.id)))
@@ -857,6 +859,7 @@ export default function ChatPage() {
         return prev.map(m => m.id === optimisticId ? msg : m)
       })
     } catch (err: unknown) {
+      sendLog(token, 'error', 'SEND_HTTP_FAILED', { id: optimisticId, error: err instanceof Error ? err.message : String(err) })
       // Mark as failed if HTTP request fails (network down)
       setMessages(prev => prev.map(m => m.id === optimisticId ? { ...m, failed: true, pending: false } : m))
       setBanner(err instanceof Error ? err.message : 'Message failed to send')
