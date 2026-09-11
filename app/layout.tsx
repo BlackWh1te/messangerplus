@@ -1,25 +1,39 @@
-import type { Metadata, Viewport } from 'next'
-import './globals.css'
+import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+
+const inter = Inter({ subsets: ["latin"] });
 
 export const viewport: Viewport = {
-  width: 'device-width',
+  themeColor: "#111827",
+  width: "device-width",
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#23211f',
-}
+};
 
 export const metadata: Metadata = {
-  title: 'MessengerPlus',
-  description: 'Private messenger for 2',
-}
+  title: "Messenger Plus",
+  description: "A modern, native-feeling messenger.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Msg+",
+  },
+};
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
     <html lang="en">
-      <body className="bg-[#171716] text-white min-h-[100dvh] overscroll-none selection:bg-teal-500/30">
-        {children}
-      </body>
+      <head>
+        <link rel="apple-touch-icon" href="/icon-192.png" />
+      </head>
+      <body className={inter.className}>{children}</body>
     </html>
-  )
+  );
 }

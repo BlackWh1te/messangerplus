@@ -159,6 +159,7 @@ async function compressImage(file: File): Promise<File> {
 export default function ChatPage() {
   const router = useRouter()
   const [messages, setMessages] = useState<Message[]>([])
+  const [partnerTyping, setPartnerTyping] = useState(false)
   const [statuses, setStatuses] = useState<Record<string, UserStatus>>({})
   const [input, setInput] = useState('')
   const [username, setUsername] = useState('')
@@ -594,6 +595,23 @@ export default function ChatPage() {
   }, [])
 
 
+
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value)
+    
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'typing', state: true }))
+      
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+      typingTimeoutRef.current = setTimeout(() => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'typing', state: false }))
+        }
+      }, 2000)
+    }
+  }
 
   const connect = useCallback(() => {
     const token = tokenRef.current
