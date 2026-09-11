@@ -160,6 +160,9 @@ export default function ChatPage() {
   const router = useRouter()
   const [messages, setMessages] = useState<Message[]>([])
   const [partnerTyping, setPartnerTyping] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
   const [statuses, setStatuses] = useState<Record<string, UserStatus>>({})
   const [input, setInput] = useState('')
   const [username, setUsername] = useState('')
@@ -686,7 +689,18 @@ export default function ChatPage() {
           return
         }
 
+        if (payload.type === 'typing') {
+          if (payload.sender !== usernameRef.current) {
+            setPartnerTyping(payload.state)
+            if (payload.state) {
+              setTimeout(() => setPartnerTyping(false), 5000)
+            }
+          }
+          return
+        }
+
         if (payload.type === 'message') {
+          setPartnerTyping(false)
           const msg: Message = payload.data
           if (!seenIdsRef.current.has(msg.id as number)) {
             seenIdsRef.current.add(msg.id as number)
@@ -694,6 +708,14 @@ export default function ChatPage() {
               const without = prev.filter(m =>
                 !(m.pending && m.sender === msg.sender && m.content === msg.content)
               )
+              if (msg.sender !== usernameRef.current) {
+                if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(100)
+                try {
+                  const audio = new window.Audio('data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq')
+                  audio.volume = 0.5
+                  audio.play().catch(()=>{})
+                } catch(e){}
+              }
               return [...without, msg]
             })
           }
@@ -814,6 +836,50 @@ export default function ChatPage() {
       setBanner(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setIsUploading(false)
+    }
+  }
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      audioChunksRef.current = []
+      
+      recorder.ondataavailable = e => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+      
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop())
+        setIsRecording(false)
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        if (audioBlob.size < 1000) return // too short
+        
+        try {
+          setIsUploading(true)
+          setBanner('Uploading voice message...')
+          const file = new File([audioBlob], 'voice.webm', { type: 'audio/webm' })
+          const res = await uploadImage(tokenRef.current!, file as any)
+          sendMessage(undefined, `[audio:${res.url}]`)
+          setBanner('')
+        } catch (err: any) {
+          setBanner('Voice upload failed')
+        } finally {
+          setIsUploading(false)
+        }
+      }
+      
+      recorder.start()
+      mediaRecorderRef.current = recorder
+      setIsRecording(true)
+    } catch (e) {
+      setBanner('Microphone permission denied')
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
     }
   }
 
@@ -940,6 +1006,12 @@ export default function ChatPage() {
         </div>
       </div>
 
+      {partnerTyping && (
+        <div className="bg-gray-800 text-gray-400 text-xs px-4 py-1 animate-pulse">
+          {otherUser} is typing...
+        </div>
+      )}
+
       <CallPanel
         callState={callState}
         mode={callMode}
@@ -1009,6 +1081,18 @@ export default function ChatPage() {
                         </div>
                       )
                     }
+                    const audioMatch = msg.content.match(/^\[audio:(.+)\]$/);
+                    if (audioMatch) {
+                      return (
+                        <div className={`relative ${msg.pending ? 'opacity-75' : ''} ${msg.failed ? 'border border-rose-500/50 rounded-lg p-1 bg-rose-950/30' : ''}`}>
+                          <audio controls src={audioMatch[1].startsWith('/') ? '/api/proxy' + audioMatch[1] : audioMatch[1]} className="max-w-[200px] sm:max-w-[250px] h-10 rounded-full bg-white/10" />
+                          <span className={`absolute -bottom-5 right-1 text-[10px] whitespace-nowrap inline-flex items-center px-1 text-zinc-400`}>
+                            {formatTime(msg.timestamp)}
+                            {isMe && <Ticks pending={msg.pending} delivered={msg.delivered} read={msg.read} />}
+                          </span>
+                        </div>
+                      )
+                    }
                     const stickerMatch = msg.content.match(/^\[sticker:(.+)\]$/);
                     if (stickerMatch) {
                       return (
@@ -1060,7 +1144,7 @@ export default function ChatPage() {
           </button>
           <textarea
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={handleInputChange}
             placeholder="Message"
             className="flex-1 bg-[#171716] border border-zinc-700 rounded-[20px] px-4 py-[10px] text-white focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 text-[16px] placeholder-zinc-500 resize-none min-h-[44px] max-h-[120px]"
             autoComplete="off"
@@ -1078,6 +1162,17 @@ export default function ChatPage() {
               }
             }}
           />
+          <button
+            type="button"
+            onClick={isRecording ? stopRecording : startRecording}
+            className={`p-3 rounded-full transition-colors mb-[3px] touch-manipulation focus:outline-none shrink-0 flex items-center justify-center ${isRecording ? 'bg-red-500 animate-pulse text-white' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'}`}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="22"/>
+            </svg>
+          </button>
           <button
             type="button"
             onClick={(e) => { e.preventDefault(); if(input.trim()) sendMessage(e as any); }}
